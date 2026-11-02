@@ -11,6 +11,7 @@ import {
   RunId,
   ThreadId,
   type OrchestrationV2ExecutionNode,
+  type OrchestrationV2Run,
   type OrchestrationV2RunStatus,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
@@ -26,11 +27,14 @@ import {
   deriveRunlessWorkStartedAt,
   deriveThreadActivityRun,
   deriveThreadRuntime,
+  deriveUsageLimitNoticeRows,
   isBackgroundWorkStopPending,
+  limitRecoveryOwnsSnooze,
   presentPendingBackgroundWork,
   presentProviderGoal,
   presentRunStop,
   threadRuntimeHasInterruptibleRun,
+  withoutUsageLimitNoticeRows,
 } from "./threadExecution.ts";
 
 const now = DateTime.makeUnsafe("2026-07-28T10:00:00.000Z");
@@ -537,5 +541,165 @@ describe("presentPendingBackgroundWork", () => {
       },
     ]);
     expect(presentation?.items[0]?.label).toBe("mv a.ts b.ts\ncat > b.ts <<'EOF'\nexport {};\nEOF");
+  });
+});
+
+describe("usage-limit notice rows", () => {
+  const limited = {
+    ...run("limited", 1, "failed"),
+    rootNodeId: NodeId.make("root"),
+    completedAt: now,
+  };
+  const providerTurnId = ProviderTurnId.make("provider-turn-limited");
+  const base = {
+    threadId: v2Projection.thread.id,
+    runId: limited.id,
+    nodeId: NodeId.make("assistant-node"),
+    providerThreadId: null,
+    providerTurnId,
+    nativeItemRef: null,
+    parentItemId: null,
+    status: "completed" as const,
+    title: null,
+    startedAt: now,
+    completedAt: now,
+    updatedAt: now,
+  };
+  const assistant = (id: string, ordinal: number, text: string) => ({
+    ...base,
+    id: TurnItemId.make(id),
+    ordinal,
+    type: "assistant_message" as const,
+    messageId: MessageId.make(`message-${id}`),
+    text,
+    streaming: false,
+  });
+  const error = (id: string, ordinal: number, overrides: object = {}) => ({
+    ...base,
+    id: TurnItemId.make(id),
+    ordinal,
+    nodeId: limited.rootNodeId,
+    status: "failed" as const,
+    type: "error" as const,
+    failure: {
+      class: "usage_limit" as const,
+      message: "Claude usage limit reached. Send the message again once the limit resets.",
+      code: "api_error_429",
+      retryable: true,
+      resetAt: "2026-07-28T13:10:00.000Z",
+    },
+    ...overrides,
+  });
+  const notice = (id: string, ordinal: number, nativeId: string) => ({
+    ...base,
+    id: TurnItemId.make(id),
+    ordinal,
+    nativeItemRef: {
+      driver: ProviderDriverKind.make("claudeAgent"),
+      nativeId,
+      strength: "weak" as const,
+    },
+    type: "system_notice" as const,
+    message: "Claude usage limit reached. This turn is paused until the 5-hour limit resets.",
+  });
+  const turnItems = [
+    assistant("useful", 1, "I updated the parser and started on the tests."),
+    notice("pause", 2, `usage-limit:${providerTurnId}:five_hour:1785258600`),
+    notice("unrelated-notice", 3, "compaction:1"),
+    error("child-error", 4, {
+      nodeId: NodeId.make("child"),
+      failure: { class: "provider_error", message: "Subagent failed", code: null, retryable: null },
+    }),
+    assistant("cli-notice", 5, "You've hit your 5-hour limit · resets 7:10am (Asia/Kolkata)"),
+    error("limit-error", 6),
+  ];
+  const swap = (index: number, item: (typeof turnItems)[number]) =>
+    turnItems.map((current, position) => (position === index ? item : current));
+  const rows = (items: ReadonlyArray<(typeof turnItems)[number]>) =>
+    items.map((item, position) => ({
+      position,
+      visibility: "local" as const,
+      sourceThreadId: v2Projection.thread.id,
+      sourceItemId: item.id,
+      item,
+    }));
+  const visibleIds = (projection: typeof v2Projection) =>
+    withoutUsageLimitNoticeRows(
+      projection.visibleTurnItems,
+      deriveUsageLimitNoticeRows(projection),
+    ).map((row) => row.item.id);
+  const projection = (runs: ReadonlyArray<OrchestrationV2Run>, items = turnItems) => ({
+    ...v2Projection,
+    runs,
+    turnItems: items,
+    visibleTurnItems: rows(items),
+  });
+
+  it("leaves the recovery notice as the only account of a usage-limit pause", () => {
+    const kept = ["useful", "unrelated-notice", "child-error"];
+    expect(visibleIds(projection([limited]))).toEqual(kept);
+    // Follow-ups that never started do not end the pause.
+    expect(visibleIds(projection([limited, run("queued", 2, "queued")]))).toEqual(kept);
+    expect(
+      visibleIds(projection([limited, { ...run("held", 2, "queued"), queueHeld: true }])),
+    ).toEqual(kept);
+    expect(
+      visibleIds(
+        projection([
+          limited,
+          { ...run("dropped", 2, "cancelled"), startedAt: null, completedAt: now },
+        ]),
+      ),
+    ).toEqual(kept);
+  });
+
+  it("keeps the agent's own words in the limited turn", () => {
+    const reply = assistant(
+      "cli-notice",
+      5,
+      "I've hit your limit on retries, so here is the plan.",
+    );
+    expect(visibleIds(projection([limited], swap(4, reply)))).toContain("cli-notice");
+    const earlierTurn = { ...turnItems[4]!, providerTurnId: ProviderTurnId.make("earlier-turn") };
+    expect(visibleIds(projection([limited], swap(4, earlierTurn)))).toContain("cli-notice");
+  });
+
+  it("returns the rows to history once another run executes or the failure is not a usage limit", () => {
+    const all = turnItems.map((item) => item.id);
+    const next = { ...run("next", 2, "completed"), completedAt: now };
+    expect(visibleIds(projection([limited, next]))).toEqual(all);
+    expect(visibleIds(projection([limited, run("next", 2, "running")]))).toEqual(all);
+    const providerError = error("limit-error", 6, {
+      failure: { class: "provider_error", message: "Boom", code: null, retryable: null },
+    });
+    expect(visibleIds(projection([limited], swap(5, providerError)))).toEqual(all);
+  });
+});
+
+describe("limitRecoveryOwnsSnooze", () => {
+  const runId = RunId.make("limited");
+  const resetAt = "2026-07-28T13:10:00.000Z";
+  const owned = {
+    runId,
+    resetAt,
+    recovery: { runId, resetAt, autoResume: true, snooze: true },
+    snoozedUntil: resetAt,
+  };
+
+  it("belongs to the recovery only for the run and reset it snoozed", () => {
+    expect(limitRecoveryOwnsSnooze(owned)).toBe(true);
+    // Auto-resume and snooze are independent; cancelling one keeps the other.
+    expect(
+      limitRecoveryOwnsSnooze({ ...owned, recovery: { ...owned.recovery, autoResume: false } }),
+    ).toBe(true);
+    expect(
+      limitRecoveryOwnsSnooze({ ...owned, recovery: { ...owned.recovery, snooze: false } }),
+    ).toBe(false);
+    expect(limitRecoveryOwnsSnooze({ ...owned, snoozedUntil: "2026-07-29T09:00:00.000Z" })).toBe(
+      false,
+    );
+    expect(limitRecoveryOwnsSnooze({ ...owned, runId: RunId.make("later") })).toBe(false);
+    expect(limitRecoveryOwnsSnooze({ ...owned, resetAt: "2026-07-28T14:10:00.000Z" })).toBe(false);
+    expect(limitRecoveryOwnsSnooze({ ...owned, recovery: null })).toBe(false);
   });
 });

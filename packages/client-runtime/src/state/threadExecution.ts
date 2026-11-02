@@ -15,6 +15,7 @@ import {
   type OrchestrationV2ProviderGoal,
   type ServerProviderModel,
   type OrchestrationV2ExecutionNode,
+  type OrchestrationV2LimitRecovery,
   type OrchestrationV2ThreadProjection,
   orchestrationV2RunWorkStartedAt,
   type RunId,
@@ -34,6 +35,7 @@ import {
   type ThreadRuntimeSummary,
   type ThreadStructure,
   type ThreadStructureRuntime,
+  type ThreadStructureTurnItem,
 } from "./models.ts";
 import { commandDisplayText } from "../work-log/commandLabel.ts";
 import { formatSubagentDisplayTitle } from "./subagentDisplay.ts";
@@ -287,6 +289,97 @@ export function deriveThreadStructureRuntime(
       providerSession?.lastError ?? null,
     ),
   };
+}
+
+export interface UsageLimitNoticeRows {
+  readonly itemIds: ReadonlySet<ThreadStructureTurnItem["id"]>;
+  /** Hidden only when its text reads as the provider's limit message; see PROVIDER_LIMIT_NOTICE. */
+  readonly providerNoticeItemId: ThreadStructureTurnItem["id"] | null;
+}
+
+// Claude Code's own limit messages, such as "You've hit your 5-hour limit · resets 7:10am".
+const PROVIDER_LIMIT_NOTICE =
+  /^(?:You[’']ve hit your [^\n]*\blimit\b|You[’']re out of extra usage\b|Claude AI usage limit reached\b)[^\n]*$/i;
+
+/**
+ * The timeline rows that repeat a usage-limit pause while its recovery notice shows: the run's
+ * limit failure, Claude's pause notices, and the provider's own limit message. They return to
+ * history once another run executes.
+ */
+export function deriveUsageLimitNoticeRows(
+  projection: ThreadStructure,
+): UsageLimitNoticeRows | null {
+  const runtime = deriveThreadStructureRuntime(projection);
+  const run = presentedLatestRun(projection);
+  if (runtime?.status !== "failed" || runtime.lastErrorClass !== "usage_limit" || run === null) {
+    return null;
+  }
+  const failure = latestRootProviderFailure(run, projection.turnItems);
+  const itemIds = new Set<ThreadStructureTurnItem["id"]>();
+  let failedProviderTurnId: ThreadStructureTurnItem["providerTurnId"] = null;
+  for (const item of projection.turnItems) {
+    if (item.runId !== run.id) continue;
+    if (
+      item.type === "error" &&
+      item.status === "failed" &&
+      item.nodeId === run.rootNodeId &&
+      item.failure.class === "usage_limit"
+    ) {
+      itemIds.add(item.id);
+      if (item.failure === failure) failedProviderTurnId = item.providerTurnId;
+    } else if (
+      item.type === "system_notice" &&
+      item.nativeItemRef?.nativeId?.startsWith("usage-limit:") === true
+    ) {
+      itemIds.add(item.id);
+    }
+  }
+  let providerNotice: ThreadStructureTurnItem | null = null;
+  if (failedProviderTurnId !== null) {
+    for (const item of projection.turnItems) {
+      if (
+        item.type === "assistant_message" &&
+        item.runId === run.id &&
+        item.providerTurnId === failedProviderTurnId &&
+        item.parentItemId === null &&
+        (providerNotice === null || item.ordinal > providerNotice.ordinal)
+      ) {
+        providerNotice = item;
+      }
+    }
+  }
+  return { itemIds, providerNoticeItemId: providerNotice?.id ?? null };
+}
+
+export function withoutUsageLimitNoticeRows<
+  Row extends OrchestrationV2ThreadProjection["visibleTurnItems"][number],
+>(rows: ReadonlyArray<Row>, notice: UsageLimitNoticeRows | null): ReadonlyArray<Row> {
+  if (notice === null) return rows;
+  const hidden = ({ item }: Row) =>
+    notice.itemIds.has(item.id) ||
+    (item.id === notice.providerNoticeItemId &&
+      item.type === "assistant_message" &&
+      PROVIDER_LIMIT_NOTICE.test(item.text.trim()));
+  return rows.some(hidden) ? rows.filter((row) => !hidden(row)) : rows;
+}
+
+/** Whether a usage-limit recovery holds the thread's snooze, so its notice offers Wake now. */
+export function limitRecoveryOwnsSnooze(input: {
+  readonly runId: RunId | null | undefined;
+  readonly resetAt: string | null | undefined;
+  readonly recovery: OrchestrationV2LimitRecovery | null | undefined;
+  readonly snoozedUntil: string | null | undefined;
+}): boolean {
+  const { runId, resetAt, recovery, snoozedUntil } = input;
+  return (
+    recovery?.snooze === true &&
+    runId != null &&
+    recovery.runId === runId &&
+    resetAt != null &&
+    recovery.resetAt === resetAt &&
+    snoozedUntil != null &&
+    Date.parse(snoozedUntil) === Date.parse(resetAt)
+  );
 }
 
 export function threadRuntimeHasInterruptibleRun(

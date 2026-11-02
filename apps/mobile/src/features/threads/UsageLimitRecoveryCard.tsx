@@ -2,8 +2,8 @@ import { Button } from "../../components/ui/Button";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import { AsyncResult } from "effect/reactivity";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
+import { limitRecoveryOwnsSnooze } from "@t3tools/client-runtime/state/thread-execution";
 import type { EnvironmentId } from "@t3tools/contracts";
-import * as DateTime from "effect/DateTime";
 import { useState } from "react";
 import { View } from "react-native";
 import { AppText as Text } from "../../components/ui/AppText";
@@ -36,13 +36,12 @@ export function UsageLimitRecoveryCard({
     !runId
   )
     return null;
-  const snoozed =
-    recovery?.snooze === true &&
-    recovery.runId === runId &&
-    recovery.resetAt === resetAt &&
-    resetAt !== null &&
-    thread.snoozedUntil !== null &&
-    Date.parse(thread.snoozedUntil) === Date.parse(resetAt);
+  const snoozed = limitRecoveryOwnsSnooze({
+    runId,
+    resetAt,
+    recovery,
+    snoozedUntil: thread.snoozedUntil,
+  });
   async function toggle(action: "resume" | "snooze") {
     if (!resetAt || !runId || !canSchedule) return;
     if (action === "snooze" && !snoozed && Date.parse(resetAt) <= Date.now()) {
@@ -72,8 +71,15 @@ export function UsageLimitRecoveryCard({
     <View className="mx-3 mb-2 gap-2 rounded-xl border border-warning-foreground/25 bg-screen p-3">
       <Text className="text-sm text-warning-foreground">
         {resetAt
-          ? `Usage limit resets ${DateTime.toDateUtc(DateTime.makeUnsafe(resetAt)).toLocaleString()}.`
-          : "The provider did not report a reset time. Retry manually when your limit is available."}
+          ? `Usage limit reached. ${canSchedule && scheduled ? "Resumes" : "Resets"} ${new Date(
+              resetAt,
+            ).toLocaleString(undefined, {
+              month: "short",
+              day: "numeric",
+              hour: "numeric",
+              minute: "2-digit",
+            })}.`
+          : "Usage limit reached. The provider did not report a reset time. Retry manually when your limit is available."}
       </Text>
       {canSchedule ? (
         <View className="flex-row flex-wrap gap-2">

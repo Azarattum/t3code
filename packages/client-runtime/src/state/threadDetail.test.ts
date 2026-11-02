@@ -2,6 +2,8 @@ import {
   EnvironmentId,
   EventId,
   MessageId,
+  NodeId,
+  ProviderTurnId,
   RunId,
   TurnItemId,
   type OrchestrationV2ThreadProjection,
@@ -234,6 +236,83 @@ describe("timelineVisibleTurnItemsAtom", () => {
 
     push({ ...assistant, text: "Hello", streaming: false, status: "completed" });
     expect(registry.get(timelineAtom)[0]?.item).toMatchObject({ text: "Hello", streaming: false });
+    registry.dispose();
+  });
+
+  it("leaves a usage-limit pause to its recovery notice until another run executes", () => {
+    const run = (id: string, ordinal: number, status: "failed" | "completed") => ({
+      id: RunId.make(id),
+      threadId: v2ThreadId,
+      ordinal,
+      providerInstanceId: v2Projection.thread.providerInstanceId,
+      modelSelection: v2Projection.thread.modelSelection,
+      providerThreadId: null,
+      userMessageId: MessageId.make(`message-${id}`),
+      rootNodeId: NodeId.make(`root-${id}`),
+      activeAttemptId: null,
+      status,
+      requestedAt: v2Now,
+      startedAt: v2Now,
+      completedAt: v2Now,
+      checkpointId: null,
+      contextHandoffId: null,
+    });
+    const limited = run("run-1", 1, "failed");
+    const providerTurnId = ProviderTurnId.make("provider-turn-1");
+    const notice = {
+      ...assistant,
+      id: TurnItemId.make("item-limit-notice"),
+      providerTurnId,
+      status: "completed" as const,
+      text: "You've hit your 5-hour limit · resets 7:10am (Asia/Kolkata)",
+      streaming: false,
+    };
+    const failure: OrchestrationV2TurnItem = {
+      ...assistant,
+      id: TurnItemId.make("item-limit-error"),
+      nodeId: limited.rootNodeId,
+      providerTurnId,
+      ordinal: 2,
+      status: "failed",
+      type: "error",
+      failure: { class: "usage_limit", message: "Usage limit", code: null, retryable: true },
+    };
+    const withRuns = (runs: ReadonlyArray<ReturnType<typeof run>>) => {
+      const items = [notice, failure];
+      return {
+        ...v2Projection,
+        runs,
+        turnItems: items,
+        visibleTurnItems: items.map((item, position) => ({
+          position,
+          visibility: "local" as const,
+          sourceThreadId: v2ThreadId,
+          sourceItemId: item.id,
+          item,
+        })),
+      };
+    };
+    const stateAtom = Atom.make(
+      AsyncResult.success({
+        ...EMPTY_ENVIRONMENT_THREAD_STATE,
+        data: Option.some<OrchestrationV2ThreadProjection>(withRuns([limited])),
+      }),
+    );
+    const details = createEnvironmentThreadDetailAtoms(() => stateAtom);
+    const registry = AtomRegistry.make();
+    const ids = () =>
+      registry.get(details.timelineVisibleTurnItemsAtom(ref)).map((row) => row.item.id);
+    registry.mount(details.timelineVisibleTurnItemsAtom(ref));
+    expect(ids()).toEqual([]);
+
+    registry.set(
+      stateAtom,
+      AsyncResult.success({
+        ...EMPTY_ENVIRONMENT_THREAD_STATE,
+        data: Option.some(withRuns([limited, run("run-2", 2, "completed")])),
+      }),
+    );
+    expect(ids()).toEqual([notice.id, failure.id]);
     registry.dispose();
   });
 });
