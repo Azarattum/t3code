@@ -13,6 +13,7 @@ import {
   type OrchestrationV2ExecutionNode,
   type OrchestrationV2Run,
   type OrchestrationV2RunStatus,
+  type OrchestrationV2TurnItem,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import { usageLimitBlockedRun } from "@t3tools/shared/orchestrationV2ThreadError";
@@ -592,6 +593,7 @@ describe("usage-limit notice rows", () => {
   });
   const notice = (id: string, ordinal: number, nativeId: string) => ({
     ...base,
+    nodeId: limited.rootNodeId,
     id: TurnItemId.make(id),
     ordinal,
     nativeItemRef: {
@@ -613,9 +615,9 @@ describe("usage-limit notice rows", () => {
     assistant("cli-notice", 5, "You've hit your 5-hour limit · resets 7:10am (Asia/Kolkata)"),
     error("limit-error", 6),
   ];
-  const swap = (index: number, item: (typeof turnItems)[number]) =>
+  const swap = (index: number, item: OrchestrationV2TurnItem) =>
     turnItems.map((current, position) => (position === index ? item : current));
-  const rows = (items: ReadonlyArray<(typeof turnItems)[number]>) =>
+  const rows = (items: ReadonlyArray<OrchestrationV2TurnItem>) =>
     items.map((item, position) => ({
       position,
       visibility: "local" as const,
@@ -628,7 +630,10 @@ describe("usage-limit notice rows", () => {
       projection.visibleTurnItems,
       deriveUsageLimitNoticeRows(projection),
     ).map((row) => row.item.id);
-  const projection = (runs: ReadonlyArray<OrchestrationV2Run>, items = turnItems) => ({
+  const projection = (
+    runs: ReadonlyArray<OrchestrationV2Run>,
+    items: ReadonlyArray<OrchestrationV2TurnItem> = turnItems,
+  ) => ({
     ...v2Projection,
     runs,
     turnItems: items,
@@ -638,6 +643,16 @@ describe("usage-limit notice rows", () => {
   it("leaves the recovery notice as the only account of a usage-limit pause", () => {
     const kept = ["useful", "unrelated-notice", "child-error"];
     expect(visibleIds(projection([limited]))).toEqual(kept);
+    for (const text of [
+      "You've hit your session limit",
+      "You've hit your session limit · resets 11:10am (Australia/Sydney)",
+      "You're out of extra usage",
+      "Claude AI usage limit reached.",
+    ]) {
+      expect(visibleIds(projection([limited], swap(4, assistant("cli-notice", 5, text))))).toEqual(
+        kept,
+      );
+    }
     // Follow-ups that never started do not end the pause.
     expect(visibleIds(projection([limited, run("queued", 2, "queued")]))).toEqual(kept);
     expect(
@@ -654,14 +669,37 @@ describe("usage-limit notice rows", () => {
   });
 
   it("keeps the agent's own words in the limited turn", () => {
-    const reply = assistant(
-      "cli-notice",
-      5,
+    for (const text of [
       "I've hit your limit on retries, so here is the plan.",
-    );
-    expect(visibleIds(projection([limited], swap(4, reply)))).toContain("cli-notice");
+      "You've hit your configured retry limit; reduce maxRetries and rerun the build.",
+      "Claude AI usage limit reached, but the changes are saved in src/parser.ts.",
+      "You've hit your 5-hour limit · resets 7:10am. The changes are saved.",
+    ]) {
+      expect(
+        visibleIds(projection([limited], swap(4, assistant("cli-notice", 5, text)))),
+      ).toContain("cli-notice");
+    }
     const earlierTurn = { ...turnItems[4]!, providerTurnId: ProviderTurnId.make("earlier-turn") };
     expect(visibleIds(projection([limited], swap(4, earlierTurn)))).toContain("cli-notice");
+    const pause = turnItems[1]!;
+    for (const item of [
+      { ...pause, nodeId: NodeId.make("child") },
+      { ...pause, providerTurnId: ProviderTurnId.make("earlier-turn") },
+      { ...pause, providerTurnId: null },
+      {
+        ...pause,
+        nativeItemRef: { ...pause.nativeItemRef!, driver: ProviderDriverKind.make("codex") },
+      },
+      {
+        ...pause,
+        nativeItemRef: {
+          ...pause.nativeItemRef!,
+          nativeId: "usage-limit:earlier-turn:five_hour:1",
+        },
+      },
+    ]) {
+      expect(visibleIds(projection([limited], swap(1, item)))).toContain("pause");
+    }
   });
 
   it("returns the rows to history once another run executes or the failure is not a usage limit", () => {

@@ -299,7 +299,7 @@ export interface UsageLimitNoticeRows {
 
 // Claude Code's own limit messages, such as "You've hit your 5-hour limit · resets 7:10am".
 const PROVIDER_LIMIT_NOTICE =
-  /^(?:You[’']ve hit your [^\n]*\blimit\b|You[’']re out of extra usage\b|Claude AI usage limit reached\b)[^\n]*$/i;
+  /^(?:You[’']ve hit your (?:(?:5-hour|session|weekly|usage) )?limit|You[’']re out of extra usage|Claude AI usage limit reached)(?: · resets (?:[1-9]|1[0-2])(?::[0-5]\d)?(?:am|pm)(?: \([A-Za-z_+-]+(?:\/[A-Za-z_+-]+)+\))?)?\.?$/i;
 
 /**
  * The timeline rows that repeat a usage-limit pause while its recovery notice shows: the run's
@@ -327,20 +327,23 @@ export function deriveUsageLimitNoticeRows(
     ) {
       itemIds.add(item.id);
       if (item.failure === failure) failedProviderTurnId = item.providerTurnId;
-    } else if (
-      item.type === "system_notice" &&
-      item.nativeItemRef?.nativeId?.startsWith("usage-limit:") === true
-    ) {
-      itemIds.add(item.id);
     }
   }
   let providerNotice: ThreadStructureTurnItem | null = null;
   if (failedProviderTurnId !== null) {
     for (const item of projection.turnItems) {
+      if (item.runId !== run.id || item.providerTurnId !== failedProviderTurnId) continue;
+      if (
+        item.type === "system_notice" &&
+        item.nodeId === run.rootNodeId &&
+        item.parentItemId === null &&
+        item.nativeItemRef?.driver === "claudeAgent" &&
+        item.nativeItemRef.nativeId?.startsWith(`usage-limit:${failedProviderTurnId}:`) === true
+      ) {
+        itemIds.add(item.id);
+      }
       if (
         item.type === "assistant_message" &&
-        item.runId === run.id &&
-        item.providerTurnId === failedProviderTurnId &&
         item.parentItemId === null &&
         (providerNotice === null || item.ordinal > providerNotice.ordinal)
       ) {
