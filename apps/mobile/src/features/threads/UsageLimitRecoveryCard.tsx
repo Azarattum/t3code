@@ -124,9 +124,9 @@ function RecoveryAction(props: {
       accessibilityRole="button"
       accessibilityState={{ disabled: props.disabled }}
       disabled={props.disabled}
-      hitSlop={{ top: 12, bottom: 12, left: 8, right: 8 }}
+      hitSlop={{ left: 8, right: 8 }}
       onPress={props.onPress}
-      className="active:opacity-70"
+      className="min-h-11 justify-center active:opacity-70"
     >
       <Text
         className={

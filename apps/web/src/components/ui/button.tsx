@@ -104,6 +104,7 @@ const inlineButtonVariants = cva(
     defaultVariants: { tone: "default" },
     variants: {
       touchTarget: {
+        padded: "pointer-coarse:min-h-11 pointer-coarse:px-1.5",
         expanded:
           "pointer-coarse:relative pointer-coarse:after:absolute pointer-coarse:after:-inset-x-1.5 pointer-coarse:after:-inset-y-3.5",
       },
