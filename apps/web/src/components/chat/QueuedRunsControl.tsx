@@ -368,9 +368,10 @@ export function QueuedRunsControl({
         })}
       </ol>
       {collapsible ? (
-        <div className="self-end pe-1 text-xs pointer-coarse:[&_[data-slot=inline-button]]:relative pointer-coarse:[&_[data-slot=inline-button]]:after:absolute pointer-coarse:[&_[data-slot=inline-button]]:after:-inset-x-1.5 pointer-coarse:[&_[data-slot=inline-button]]:after:-inset-y-3.5">
+        <div className="self-end pe-1 text-xs">
           <InlineButton
             tone="muted"
+            touchTarget="expanded"
             aria-expanded={showAll}
             aria-controls={queueListId}
             // Keep the composer focused; keyboard activation still works.

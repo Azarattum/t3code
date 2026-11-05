@@ -15,7 +15,7 @@ import { useState } from "react";
 import { useDeadlinePassed } from "../../hooks/useDeadline";
 import { OpenAI } from "../Icons";
 import { ChatGptUsageButton } from "../settings/ChatGptUsageButton";
-import { Button } from "../ui/button";
+import { Button, InlineButton } from "../ui/button";
 import { formatUpcomingTimestamp } from "../../timestampFormat";
 import { toastManager } from "../ui/toast";
 import type { ComposerBannerStackItem } from "./ComposerBannerStack";
@@ -125,18 +125,17 @@ function RecoveryActions({ runId, resetAt, recovery, snoozedUntil, onChange }: R
   }
   // Inline errors would widen the actions column and crush the title.
   return (
-    <>
-      <Button size="xs" variant="ghost" disabled={pending} onClick={() => void toggle("resume")}>
+    <span className="flex flex-wrap items-center gap-x-3 gap-y-1 px-1">
+      <InlineButton touchTarget="expanded" disabled={pending} onClick={() => void toggle("resume")}>
         {pending ? "Saving..." : scheduled ? "Cancel auto-resume" : "Resume at reset"}
-      </Button>
-      <Button
-        size="xs"
-        variant="ghost"
+      </InlineButton>
+      <InlineButton
+        touchTarget="expanded"
         disabled={pending || (!snoozed && resetPassed)}
         onClick={() => void toggle("snooze")}
       >
         {pending ? "Saving..." : snoozed ? "Wake now" : "Snooze until reset"}
-      </Button>
-    </>
+      </InlineButton>
+    </span>
   );
 }
