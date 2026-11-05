@@ -31,6 +31,14 @@ export function UsageLimitRecoveryCard({
   const recovery = thread.limitRecovery;
   const scheduled =
     recovery?.runId === runId && recovery?.resetAt === resetAt && recovery?.autoResume;
+  const displayAt =
+    canSchedule &&
+    scheduled &&
+    resetAt &&
+    thread.snoozedUntil &&
+    Date.parse(thread.snoozedUntil) > Date.parse(resetAt)
+      ? thread.snoozedUntil
+      : resetAt;
   if (
     thread.runtime?.status !== "failed" ||
     thread.runtime.lastErrorClass !== "usage_limit" ||
@@ -71,9 +79,9 @@ export function UsageLimitRecoveryCard({
   return (
     <View className="mx-3 mb-2 gap-2 rounded-xl border border-warning-foreground/25 bg-screen p-3">
       <Text className="text-sm text-warning-foreground">
-        {resetAt
+        {displayAt
           ? `Usage limit reached. ${canSchedule && scheduled ? "Resumes" : "Resets"} ${new Date(
-              resetAt,
+              displayAt,
             ).toLocaleString(undefined, {
               month: "short",
               day: "numeric",

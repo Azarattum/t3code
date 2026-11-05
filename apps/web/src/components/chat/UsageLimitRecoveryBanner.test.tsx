@@ -21,9 +21,15 @@ function bannerDescription(resetAt: Date, timestampFormat: TimestampFormat) {
 }
 
 describe("usageLimitRecoveryBannerItem", () => {
-  it.each([false, true])(
-    "only schedules recovery for an unsettled thread, settled=%s",
-    (settled) => {
+  it.each([
+    [false, null, "Resumes 17:30"],
+    [false, 16, "Resumes 17:30"],
+    [false, 18, "Resumes 18:30"],
+    [true, null, "Resets 17:30"],
+    [true, 18, "Resets 17:30"],
+  ] as const)(
+    "accounts for settlement and a later snooze, settled=%s snoozeHour=%s",
+    (settled, snoozeHour, description) => {
       const resetAt = new Date(2026, 9, 20, 17, 30).toISOString();
       const runId = RunId.make("run-1");
       using _now = vi.spyOn(Date, "now").mockReturnValue(stoppedAt.getTime());
@@ -33,12 +39,13 @@ describe("usageLimitRecoveryBannerItem", () => {
         resetAt,
         stoppedAt: stoppedAt.toISOString(),
         settled,
-        snoozedUntil: resetAt,
+        snoozedUntil:
+          snoozeHour === null ? null : new Date(2026, 9, 20, snoozeHour, 30).toISOString(),
         recovery: { runId, resetAt, autoResume: true, snooze: true },
         timestampFormat: "24-hour",
         onChange: async () => {},
       });
-      expect(item.description).toBe(`${settled ? "Resets" : "Resumes"} 17:30`);
+      expect(item.description).toBe(description);
       expect(item.actions === null).toBe(settled);
     },
   );

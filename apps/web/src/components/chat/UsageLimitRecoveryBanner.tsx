@@ -34,7 +34,8 @@ type RecoveryProps = {
 };
 
 export function usageLimitRecoveryBannerItem(props: RecoveryProps): ComposerBannerStackItem {
-  const { runId, errorCode, resetAt, stoppedAt, settled, recovery, timestampFormat } = props;
+  const { runId, errorCode, resetAt, stoppedAt, settled, recovery, snoozedUntil, timestampFormat } =
+    props;
   const canSchedule = !settled && resetAt !== null && Date.parse(resetAt) > Date.parse(stoppedAt);
   const resumes =
     canSchedule && recovery?.runId === runId && recovery.resetAt === resetAt && recovery.autoResume;
@@ -43,8 +44,12 @@ export function usageLimitRecoveryBannerItem(props: RecoveryProps): ComposerBann
   const recoveryActions = canSchedule ? (
     <RecoveryActions key={`${runId}:${resetAt}`} {...props} />
   ) : null;
-  const resetDescription = resetAt
-    ? `${resumes ? "Resumes" : "Resets"} ${formatUpcomingTimestamp(resetAt, timestampFormat)}`
+  const displayAt =
+    resumes && resetAt && snoozedUntil && Date.parse(snoozedUntil) > Date.parse(resetAt)
+      ? snoozedUntil
+      : resetAt;
+  const resetDescription = displayAt
+    ? `${resumes ? "Resumes" : "Resets"} ${formatUpcomingTimestamp(displayAt, timestampFormat)}`
     : "Reset time unavailable; retry manually";
   if (!chatGptLimit) {
     return {
