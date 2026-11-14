@@ -1356,7 +1356,7 @@ function TaskForm({
               <ThemedSwitch
                 accessibilityLabel="Run in background"
                 value={draft.runInBackground ?? false}
-                onValueChange={(runInBackground) => setDraft({ ...draft, runInBackground })}
+                onValueChange={(runInBackground) => setDraft((current) => ({ ...current, runInBackground }))}
               />
             </View>
           )}
